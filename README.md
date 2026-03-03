@@ -1,58 +1,42 @@
-# Craftmine OneVOne (Paper 1.21.11)
+# Craftmine Duel (Browser)
 
-Simple 1v1 duels for modern Minecraft servers:
-- Queue-based matchmaking
-- Force-start by admin
-- Countdown before combat
-- Built-in kit loadout
-- Auto winner detection on death/quit
-- PvP isolation (no outside interference)
+This project is now a playable Minecraft-style 1v1 browser game.
 
-## Target Version
+Important:
+- `pom.xml` is not an app screen. It is an XML build config from the old Java setup.
+- Open `index.html` to run the game.
 
-- Minecraft (latest stable at time of build): `1.21.11`
-- Paper API: `1.21.11-R0.1-SNAPSHOT`
-- Java: `21`
+## What You Get
 
-## Build
+- First-person voxel world
+- Mine blocks (left click)
+- Place blocks (right click)
+- 1v1 combat (you vs AI enemy)
+- Health, deaths, kills, enemy respawn
+- Hotbar block switching (keys `1-5`)
 
-```bash
-mvn -DskipTests package
-```
+## Run
 
-Output jar:
+### Fastest
+1. Open `index.html` in your browser.
+2. Click `Start Game`.
 
-`target/onevone-1.0.0.jar`
+### Recommended (avoids file-permission issues on some browsers)
+1. In this folder run:
+   - `python -m http.server 8080`
+2. Open:
+   - `http://localhost:8080`
 
-## Install
+## Controls
 
-1. Put the jar in your Paper server `plugins/` folder.
-2. Start/restart server.
-3. In-game (op/admin), stand where you want each point and run:
-   - `/duel setlobby`
-   - `/duel setspawn1`
-   - `/duel setspawn2`
+- `W A S D`: move
+- `Space`: jump
+- `Mouse`: look
+- `Left Click`: mine block / attack enemy
+- `Right Click`: place selected block
+- `1..5`: select hotbar block
+- `Esc`: unlock mouse / pause control
 
-## Player Commands
+## Note On "Exact Copy"
 
-- `/duel join` - join matchmaking queue
-- `/duel leave` - leave queue or forfeit an active duel
-- `/duel status` - queue + arena status
-
-Aliases:
-- `/onevone ...`
-- `/1v1 ...`
-
-## Admin Commands
-
-- `/duel setlobby`
-- `/duel setspawn1`
-- `/duel setspawn2`
-- `/duel force <player1> <player2>`
-- `/duel reload`
-
-## Config
-
-Edit `plugins/CraftmineOneVOne/config.yml`:
-- `countdown-seconds`
-- kit material and amounts (`kit.sword`, `kit.bow`, `kit.arrows`, `kit.food`, `kit.food-amount`)
+This is a Minecraft-inspired implementation built from scratch. It does not include official Minecraft code or assets.
