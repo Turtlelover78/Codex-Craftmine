@@ -144,7 +144,7 @@ canvas {
 }
 
 .slot {
-  min-width: 62px;
+  min-width: 96px;
   height: 48px;
   padding: 8px;
   border: 2px solid rgba(255, 255, 255, 0.2);
@@ -152,7 +152,7 @@ canvas {
   background: var(--slot);
   color: #fff;
   text-transform: capitalize;
-  font-size: 12px;
+  font-size: 11px;
   display: grid;
   place-items: center;
   transition: border-color 100ms ease, transform 100ms ease;
@@ -171,8 +171,8 @@ canvas {
   }
 
   .slot {
-    min-width: 50px;
+    min-width: 74px;
     height: 42px;
-    font-size: 11px;
+    font-size: 10px;
   }
 }

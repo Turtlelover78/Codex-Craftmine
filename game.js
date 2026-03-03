@@ -20,13 +20,13 @@
 
   const scene = new THREE.Scene();
   scene.background = new THREE.Color(0x87c9ff);
-  scene.fog = new THREE.Fog(0x87c9ff, 30, 120);
+  scene.fog = new THREE.Fog(0x87c9ff, 38, 170);
 
   const camera = new THREE.PerspectiveCamera(
     75,
     window.innerWidth / window.innerHeight,
     0.1,
-    300
+    360
   );
   camera.rotation.order = "YXZ";
 
@@ -37,9 +37,9 @@
   sun.position.set(22, 36, 15);
   scene.add(sun);
 
-  const WORLD_RADIUS = 22;
-  const WORLD_FLOOR = -3;
-  const WORLD_TOP_SCAN = 24;
+  const WORLD_RADIUS = 34;
+  const WORLD_FLOOR = -8;
+  const WORLD_TOP_SCAN = 42;
   const BLOCK_REACH = 6;
 
   const PLAYER_RADIUS = 0.3;
@@ -47,8 +47,17 @@
   const PLAYER_EYE_HEIGHT = 1.62;
   const GRAVITY = 25;
 
-  const HOTBAR_BLOCKS = ["grass", "dirt", "stone", "wood", "sand"];
+  const HOTBAR_BLOCKS = ["grass", "dirt", "stone", "wood", "sand", "leaves"];
   let selectedBlockIndex = 0;
+
+  const inventory = {
+    grass: 24,
+    dirt: 24,
+    stone: 24,
+    wood: 12,
+    sand: 12,
+    leaves: 8
+  };
 
   const blocks = new Map();
   const terrainHeight = new Map();
@@ -67,44 +76,30 @@
     vel: new THREE.Vector3(),
     yaw: 0,
     pitch: 0,
-    speed: 6.4,
+    walkSpeed: 5.7,
+    sprintSpeed: 8.4,
     jumpSpeed: 9.0,
     onGround: false,
     health: 20,
     maxHealth: 20,
-    kills: 0,
     deaths: 0,
-    attackCooldown: 0
+    fallStartY: 0
   };
 
-  const enemy = {
-    pos: new THREE.Vector3(),
-    maxHealth: 20,
-    health: 20,
-    alive: true,
-    attackCooldown: 0,
-    respawnTimer: 0,
-    kills: 0,
-    deaths: 0
+  const worldClock = {
+    timeOfDay: 0.27,
+    dayLengthSeconds: 240
   };
-
-  const enemyGroup = buildEnemy();
-  const enemyHitbox = new THREE.Mesh(
-    new THREE.BoxGeometry(0.85, 1.8, 0.85),
-    new THREE.MeshBasicMaterial({ visible: false })
-  );
-  scene.add(enemyGroup);
-  scene.add(enemyHitbox);
 
   const keys = Object.create(null);
   let pointerLocked = false;
   let messageTimer = 0;
+  let daylightLevel = 1;
 
   buildHotbar();
   generateWorld();
   spawnPlayer(false);
-  spawnEnemy(false);
-  syncEnemyVisual();
+  updateSky(0);
   updateCamera();
   updateHud();
 
@@ -137,7 +132,7 @@
       const index = Number(event.code.replace("Digit", "")) - 1;
       if (index >= 0 && index < HOTBAR_BLOCKS.length) {
         selectedBlockIndex = index;
-        refreshHotbarSelection();
+        refreshHotbar();
       }
     }
     if (event.code === "Space") {
@@ -149,15 +144,25 @@
     keys[event.code] = false;
   });
 
+  window.addEventListener("wheel", (event) => {
+    if (!pointerLocked) {
+      return;
+    }
+    const direction = Math.sign(event.deltaY);
+    if (!direction) {
+      return;
+    }
+    selectedBlockIndex =
+      (selectedBlockIndex + direction + HOTBAR_BLOCKS.length) % HOTBAR_BLOCKS.length;
+    refreshHotbar();
+  });
+
   window.addEventListener("mousedown", (event) => {
     if (!pointerLocked) {
       return;
     }
 
     if (event.button === 0) {
-      if (tryAttackEnemy()) {
-        return;
-      }
       tryBreakBlock();
       return;
     }
@@ -185,7 +190,7 @@
       updatePlayer(dt);
     }
 
-    updateEnemy(dt);
+    updateSky(dt);
     updateCamera();
     updateHud();
     updateMessage(dt);
@@ -195,10 +200,10 @@
   }
 
   function updatePlayer(dt) {
-    player.attackCooldown = Math.max(0, player.attackCooldown - dt);
-
+    const wasOnGround = player.onGround;
     const moveForward = (keys.KeyW ? 1 : 0) - (keys.KeyS ? 1 : 0);
     const moveSide = (keys.KeyD ? 1 : 0) - (keys.KeyA ? 1 : 0);
+    const moveSpeed = keys.ShiftLeft || keys.ShiftRight ? player.sprintSpeed : player.walkSpeed;
 
     tmpVec.set(-Math.sin(player.yaw), 0, -Math.cos(player.yaw));
     tmpVec2.set(Math.cos(player.yaw), 0, -Math.sin(player.yaw));
@@ -210,12 +215,13 @@
       moveDir.normalize();
     }
 
-    player.vel.x = moveDir.x * player.speed;
-    player.vel.z = moveDir.z * player.speed;
+    player.vel.x = moveDir.x * moveSpeed;
+    player.vel.z = moveDir.z * moveSpeed;
 
     if (keys.Space && player.onGround) {
       player.vel.y = player.jumpSpeed;
       player.onGround = false;
+      player.fallStartY = player.pos.y;
     }
 
     player.vel.y -= GRAVITY * dt;
@@ -233,68 +239,77 @@
       player.pos.z = nextZ.z;
     }
 
+    let hitGround = false;
     const nextY = player.pos.clone();
+    const movingDown = player.vel.y <= 0;
     nextY.y += player.vel.y * dt;
     if (!collidesAt(nextY)) {
       player.pos.y = nextY.y;
-      player.onGround = false;
     } else {
-      if (player.vel.y < 0) {
-        player.onGround = true;
+      if (movingDown) {
+        hitGround = true;
       }
       player.vel.y = 0;
     }
 
     const groundProbe = player.pos.clone();
     groundProbe.y -= 0.08;
-    if (collidesAt(groundProbe)) {
-      player.onGround = true;
+    player.onGround = hitGround || collidesAt(groundProbe);
+
+    if (!wasOnGround && player.onGround) {
+      applyFallDamage();
+    } else if (wasOnGround && !player.onGround) {
+      player.fallStartY = player.pos.y;
+    } else if (!player.onGround && player.vel.y > 0) {
+      player.fallStartY = Math.max(player.fallStartY, player.pos.y);
     }
 
-    if (player.pos.y < WORLD_FLOOR - 10) {
-      damagePlayer(999);
+    if (player.pos.y < WORLD_FLOOR - 24) {
+      damagePlayer(player.maxHealth, "You fell into the void.");
     }
   }
 
-  function updateEnemy(dt) {
-    if (!enemy.alive) {
-      enemy.respawnTimer -= dt;
-      if (enemy.respawnTimer <= 0) {
-        spawnEnemy(true);
-        showMessage("Enemy respawned.", "#cfe3ff", 900);
-      }
+  function applyFallDamage() {
+    const fallDistance = player.fallStartY - player.pos.y;
+    if (fallDistance <= 3.5) {
       return;
     }
 
-    enemy.attackCooldown = Math.max(0, enemy.attackCooldown - dt);
+    const damage = Math.floor(fallDistance - 3);
+    if (damage > 0) {
+      damagePlayer(damage, `Fall damage: -${damage} HP`);
+    }
+  }
 
-    const toPlayer = new THREE.Vector3(
-      player.pos.x - enemy.pos.x,
-      0,
-      player.pos.z - enemy.pos.z
-    );
-    const distance = toPlayer.length();
+  function updateSky(dt) {
+    worldClock.timeOfDay =
+      (worldClock.timeOfDay + dt / worldClock.dayLengthSeconds) % 1;
 
-    if (distance > 1.7) {
-      toPlayer.normalize();
-      const moveSpeed = distance > 14 ? 2.2 : 3.2;
-      const nextX = enemy.pos.x + toPlayer.x * moveSpeed * dt;
-      const nextZ = enemy.pos.z + toPlayer.z * moveSpeed * dt;
-      const nextY = getGroundY(nextX, nextZ);
+    const angle = worldClock.timeOfDay * Math.PI * 2;
+    const sunX = Math.cos(angle) * 45;
+    const sunY = Math.sin(angle) * 45;
+    sun.position.set(sunX, sunY, 18);
 
-      if (canEnemyStand(nextX, nextY, nextZ)) {
-        enemy.pos.set(nextX, nextY, nextZ);
-      }
+    daylightLevel = THREE.MathUtils.clamp((sunY + 8) / 20, 0.05, 1);
+
+    ambient.intensity = 0.3 + daylightLevel * 0.7;
+    sun.intensity = 0.06 + daylightLevel * 1.08;
+
+    const dayColor = new THREE.Color(0x87c9ff);
+    const duskColor = new THREE.Color(0x6e84c5);
+    const nightColor = new THREE.Color(0x101826);
+
+    const skyColor = new THREE.Color();
+    if (daylightLevel > 0.35) {
+      const blendToDay = (daylightLevel - 0.35) / 0.65;
+      skyColor.copy(duskColor).lerp(dayColor, blendToDay);
+    } else {
+      const blendToDusk = daylightLevel / 0.35;
+      skyColor.copy(nightColor).lerp(duskColor, blendToDusk);
     }
 
-    if (distance < 2.1 && enemy.attackCooldown <= 0) {
-      enemy.attackCooldown = 0.85;
-      damagePlayer(3);
-      showMessage("Enemy hit you.", "#ffd8d8", 600);
-    }
-
-    enemyGroup.lookAt(player.pos.x, enemy.pos.y + 1.35, player.pos.z);
-    syncEnemyVisual();
+    scene.background.copy(skyColor);
+    scene.fog.color.copy(skyColor);
   }
 
   function updateCamera() {
@@ -377,34 +392,6 @@
     return Math.max(0, Math.min(255, v | 0));
   }
 
-  function buildEnemy() {
-    const group = new THREE.Group();
-
-    const body = new THREE.Mesh(
-      new THREE.BoxGeometry(0.72, 0.95, 0.38),
-      new THREE.MeshLambertMaterial({ color: 0x4e81db })
-    );
-    body.position.y = 0.9;
-
-    const head = new THREE.Mesh(
-      new THREE.BoxGeometry(0.62, 0.62, 0.62),
-      new THREE.MeshLambertMaterial({ color: 0xf0c8a0 })
-    );
-    head.position.y = 1.7;
-
-    const legLeft = new THREE.Mesh(
-      new THREE.BoxGeometry(0.26, 0.78, 0.26),
-      new THREE.MeshLambertMaterial({ color: 0x25324f })
-    );
-    legLeft.position.set(-0.16, 0.39, 0);
-
-    const legRight = legLeft.clone();
-    legRight.position.x = 0.16;
-
-    group.add(body, head, legLeft, legRight);
-    return group;
-  }
-
   function generateWorld() {
     for (let x = -WORLD_RADIUS; x <= WORLD_RADIUS; x++) {
       for (let z = -WORLD_RADIUS; z <= WORLD_RADIUS; z++) {
@@ -414,7 +401,7 @@
 
         const h = terrainY(x, z);
         terrainHeight.set(columnKey(x, z), h);
-        const startY = Math.max(WORLD_FLOOR, h - 3);
+        const startY = Math.max(WORLD_FLOOR, h - 4);
 
         for (let y = startY; y <= h; y++) {
           let blockType = "stone";
@@ -427,7 +414,7 @@
         }
 
         const treeNoise = hash2(x * 3 + 9, z * 5 - 14);
-        if (h >= 3 && treeNoise > 0.978 && Math.abs(x) > 3 && Math.abs(z) > 3) {
+        if (h >= 3 && treeNoise > 0.978 && Math.abs(x) + Math.abs(z) > 8) {
           growTree(x, h + 1, z);
         }
       }
@@ -438,9 +425,10 @@
     addBlock(x, y, z, "wood");
     addBlock(x, y + 1, z, "wood");
     addBlock(x, y + 2, z, "wood");
+    addBlock(x, y + 3, z, "wood");
 
     for (let ox = -2; ox <= 2; ox++) {
-      for (let oy = 2; oy <= 4; oy++) {
+      for (let oy = 2; oy <= 5; oy++) {
         for (let oz = -2; oz <= 2; oz++) {
           const distance = Math.abs(ox) + Math.abs(oz) + Math.abs(oy - 3);
           if (distance <= 4) {
@@ -452,9 +440,10 @@
   }
 
   function terrainY(x, z) {
-    const wave = Math.sin(x * 0.23) * 1.8 + Math.cos(z * 0.27) * 1.4;
-    const bumpy = (hash2(x, z) - 0.5) * 2.2;
-    return Math.floor(4 + wave + bumpy);
+    const wave = Math.sin(x * 0.19) * 2.1 + Math.cos(z * 0.17) * 1.9;
+    const ridge = Math.sin((x + z) * 0.08) * 1.7;
+    const bumpy = (hash2(x, z) - 0.5) * 2.8;
+    return Math.floor(5 + wave + ridge + bumpy);
   }
 
   function hash2(x, z) {
@@ -489,7 +478,7 @@
     const key = blockKey(x, y, z);
     const block = blocks.get(key);
     if (!block) {
-      return false;
+      return null;
     }
     scene.remove(block.mesh);
     blocks.delete(key);
@@ -497,7 +486,7 @@
     if (idx >= 0) {
       solidMeshes.splice(idx, 1);
     }
-    return true;
+    return block;
   }
 
   function hasBlock(x, y, z) {
@@ -549,16 +538,21 @@
     }
 
     const pos = hit.object.userData.blockPos;
-    if (!pos) {
-      return;
-    }
-    if (pos.y <= WORLD_FLOOR) {
+    if (!pos || pos.y <= WORLD_FLOOR) {
       return;
     }
 
-    if (removeBlock(pos.x, pos.y, pos.z)) {
-      showMessage(`Mined ${pos.x},${pos.y},${pos.z}`, "#e6f3ff", 350);
+    const removed = removeBlock(pos.x, pos.y, pos.z);
+    if (!removed) {
+      return;
     }
+
+    updateColumnAfterChange(pos.x, pos.z, pos.y, false);
+    if (Object.prototype.hasOwnProperty.call(inventory, removed.type)) {
+      inventory[removed.type] += 1;
+      refreshHotbar();
+    }
+    showMessage(`Mined ${removed.type}`, "#e6f3ff", 350);
   }
 
   function tryPlaceBlock() {
@@ -576,18 +570,26 @@
     const y = target.y + Math.round(normal.y);
     const z = target.z + Math.round(normal.z);
 
-    if (y < WORLD_FLOOR || y > WORLD_TOP_SCAN + 12) {
+    if (y < WORLD_FLOOR || y > WORLD_TOP_SCAN + 20) {
       return;
     }
     if (hasBlock(x, y, z)) {
       return;
     }
-    if (wouldIntersectPlayerBlock(x, y, z) || wouldIntersectEnemyBlock(x, y, z)) {
+    if (wouldIntersectPlayerBlock(x, y, z)) {
       return;
     }
 
     const type = HOTBAR_BLOCKS[selectedBlockIndex];
+    if ((inventory[type] || 0) <= 0) {
+      showMessage(`Out of ${type}`, "#ffb6b6", 500);
+      return;
+    }
+
     if (addBlock(x, y, z, type)) {
+      inventory[type] -= 1;
+      refreshHotbar();
+      updateColumnAfterChange(x, z, y, true);
       showMessage(`Placed ${type}`, "#d0ffd6", 320);
     }
   }
@@ -598,75 +600,39 @@
     return hits.length ? hits[0] : null;
   }
 
-  function tryAttackEnemy() {
-    if (!enemy.alive || player.attackCooldown > 0) {
-      return false;
-    }
-
-    raycaster.setFromCamera(centerPointer, camera);
-    const hits = raycaster.intersectObject(enemyHitbox, false);
-    if (!hits.length || hits[0].distance > 3.3) {
-      return false;
-    }
-
-    player.attackCooldown = 0.28;
-    damageEnemy(4);
-    return true;
-  }
-
-  function damageEnemy(amount) {
-    if (!enemy.alive) {
+  function damagePlayer(amount, reasonText) {
+    if (amount <= 0) {
       return;
     }
-    enemy.health -= amount;
-    showMessage(`Hit enemy for ${amount}`, "#ffd28a", 380);
 
-    if (enemy.health <= 0) {
-      enemy.alive = false;
-      enemy.health = 0;
-      enemy.deaths += 1;
-      player.kills += 1;
-      enemy.respawnTimer = 3;
-      enemyGroup.visible = false;
-      enemyHitbox.visible = false;
-      showMessage("Enemy down. Respawn in 3s.", "#8fff9f", 1200);
-    }
-  }
-
-  function damagePlayer(amount) {
     player.health -= amount;
     if (player.health > 0) {
+      if (reasonText) {
+        showMessage(reasonText, "#ffd6d6", 700);
+      }
       return;
     }
+
     player.health = 0;
     player.deaths += 1;
-    enemy.kills += 1;
     showMessage("You died. Respawning...", "#ff9f9f", 1300);
     spawnPlayer(true);
   }
 
   function spawnPlayer(randomSpawn) {
-    const spawn = chooseSpawn(randomSpawn ? 8 : 0);
+    const spawn = chooseSpawn(randomSpawn ? 10 : 0);
     player.pos.set(spawn.x + 0.5, spawn.y + 0.01, spawn.z + 0.5);
     player.vel.set(0, 0, 0);
     player.health = player.maxHealth;
     player.onGround = false;
-  }
-
-  function spawnEnemy(randomSpawn) {
-    const spawn = chooseSpawn(randomSpawn ? 12 : 10);
-    enemy.pos.set(spawn.x + 0.5, spawn.y + 0.01, spawn.z + 0.5);
-    enemy.health = enemy.maxHealth;
-    enemy.alive = true;
-    enemy.respawnTimer = 0;
-    enemy.attackCooldown = 0;
-    enemyGroup.visible = true;
-    enemyHitbox.visible = true;
-    syncEnemyVisual();
+    player.fallStartY = player.pos.y;
+    if (randomSpawn) {
+      player.pitch = 0;
+    }
   }
 
   function chooseSpawn(minDistanceFromCenter) {
-    for (let i = 0; i < 120; i++) {
+    for (let i = 0; i < 180; i++) {
       const x = ((Math.random() * (WORLD_RADIUS * 2 - 4)) | 0) - WORLD_RADIUS + 2;
       const z = ((Math.random() * (WORLD_RADIUS * 2 - 4)) | 0) - WORLD_RADIUS + 2;
       if (x * x + z * z > WORLD_RADIUS * WORLD_RADIUS) {
@@ -689,12 +655,8 @@
   function getGroundY(x, z) {
     const bx = Math.floor(x);
     const bz = Math.floor(z);
-    let y = terrainHeight.get(columnKey(bx, bz));
-    if (typeof y === "number") {
-      return y + 1;
-    }
 
-    for (let scan = WORLD_TOP_SCAN; scan >= WORLD_FLOOR; scan--) {
+    for (let scan = WORLD_TOP_SCAN + 20; scan >= WORLD_FLOOR; scan--) {
       if (hasBlock(bx, scan, bz)) {
         return scan + 1;
       }
@@ -702,18 +664,28 @@
     return WORLD_FLOOR + 1;
   }
 
-  function canEnemyStand(x, y, z) {
-    const footX = Math.floor(x);
-    const footZ = Math.floor(z);
-    const feetY = Math.floor(y);
-    const chestY = Math.floor(y + 1);
-    if (hasBlock(footX, feetY, footZ)) {
-      return false;
+  function updateColumnAfterChange(x, z, changedY, isAdded) {
+    const key = columnKey(x, z);
+    if (isAdded) {
+      const current = terrainHeight.get(key);
+      if (typeof current !== "number" || changedY > current) {
+        terrainHeight.set(key, changedY);
+      }
+      return;
     }
-    if (hasBlock(footX, chestY, footZ)) {
-      return false;
+
+    const current = terrainHeight.get(key);
+    if (typeof current === "number" && changedY < current) {
+      return;
     }
-    return true;
+
+    for (let scan = WORLD_TOP_SCAN + 20; scan >= WORLD_FLOOR; scan--) {
+      if (hasBlock(x, scan, z)) {
+        terrainHeight.set(key, scan);
+        return;
+      }
+    }
+    terrainHeight.delete(key);
   }
 
   function wouldIntersectPlayerBlock(x, y, z) {
@@ -734,45 +706,22 @@
     );
   }
 
-  function wouldIntersectEnemyBlock(x, y, z) {
-    if (!enemy.alive) {
-      return false;
-    }
-    const minX = enemy.pos.x - 0.33;
-    const maxX = enemy.pos.x + 0.33;
-    const minY = enemy.pos.y;
-    const maxY = enemy.pos.y + 1.8;
-    const minZ = enemy.pos.z - 0.33;
-    const maxZ = enemy.pos.z + 0.33;
-
-    return (
-      maxX > x &&
-      minX < x + 1 &&
-      maxY > y &&
-      minY < y + 1 &&
-      maxZ > z &&
-      minZ < z + 1
-    );
-  }
-
-  function syncEnemyVisual() {
-    enemyGroup.position.copy(enemy.pos);
-    enemyHitbox.position.set(enemy.pos.x, enemy.pos.y + 0.9, enemy.pos.z);
-  }
-
   function buildHotbar() {
-    HOTBAR_BLOCKS.forEach((name, i) => {
+    HOTBAR_BLOCKS.forEach((name) => {
       const slot = document.createElement("div");
       slot.className = "slot";
-      slot.textContent = `${i + 1} ${name}`;
+      slot.dataset.block = name;
       hotbarEl.appendChild(slot);
     });
-    refreshHotbarSelection();
+    refreshHotbar();
   }
 
-  function refreshHotbarSelection() {
+  function refreshHotbar() {
     const nodes = hotbarEl.querySelectorAll(".slot");
     nodes.forEach((node, index) => {
+      const block = HOTBAR_BLOCKS[index];
+      const amount = inventory[block] || 0;
+      node.textContent = `${index + 1} ${block} (${amount})`;
       if (index === selectedBlockIndex) {
         node.classList.add("selected");
       } else {
@@ -798,10 +747,18 @@
   }
 
   function updateHud() {
+    const bx = Math.floor(player.pos.x);
+    const by = Math.floor(player.pos.y);
+    const bz = Math.floor(player.pos.z);
+    const dayState = daylightLevel > 0.35 ? "Day" : "Night";
+    const held = HOTBAR_BLOCKS[selectedBlockIndex];
+    const heldCount = inventory[held] || 0;
+
     statsEl.textContent =
-      `You HP: ${Math.ceil(player.health)}/${player.maxHealth}  ` +
-      `Enemy HP: ${Math.ceil(enemy.health)}/${enemy.maxHealth}  ` +
-      `Kills: ${player.kills}  Deaths: ${player.deaths}  ` +
-      `Enemy K/D: ${enemy.kills}/${enemy.deaths}`;
+      `HP: ${Math.ceil(player.health)}/${player.maxHealth}  ` +
+      `Deaths: ${player.deaths}  ` +
+      `Pos: ${bx},${by},${bz}  ` +
+      `${dayState}  ` +
+      `Held: ${held} (${heldCount})`;
   }
 })();
